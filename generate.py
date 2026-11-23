@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Make 65536qam_12k_192k.wav and symbols.csv.
+"""Make the three signal files and symbols.csv.
 
-One seamless loop: a 64-symbol QPSK preamble, then every one of the 65536
-constellation points exactly once. README.md describes the format.
+    65536qam_12k_192k.wav   level 1: clean
+    65536qam_level2.wav     level 2: carrier, timing and phase are off, but fixed
+    65536qam_level3.wav     level 3: they move, and there is an echo and noise
+
+All three carry the same symbols: a 64-symbol QPSK preamble, then every one
+of the 65536 constellation points exactly once. Each file is one seamless
+loop. README.md describes the format.
 
     python3 generate.py
 
@@ -16,10 +21,9 @@ SPS = 16                  # samples per symbol, so 12000 symbols per second
 ALPHA = 0.35              # root raised cosine roll-off
 N_PREAMBLE = 64
 PREAMBLE_LEVEL = 147      # the four preamble points are (+-147, +-147)
-CENTRE_HZ = 30_000_000    # a label for SDR software; this file never went through a radio
+CENTRE_HZ = 30_000_000    # a label for SDR software; these files never went through a radio
 PEAK = 10 ** (-1 / 20)    # largest I or Q sample: 1 dB under full scale
 
-WAV = "65536qam_12k_192k.wav"
 KEY = "symbols.csv"
 
 
@@ -71,6 +75,66 @@ def rrc(n, sps, alpha):
     return h
 
 
+def delayed(x, samples):
+    """x, later by a number of samples that need not be whole, around the loop."""
+    shift = np.exp(-2j * np.pi * np.fft.fftfreq(len(x)) * samples)
+    return np.fft.ifft(np.fft.fft(x) * shift)
+
+
+def turns(n, cycles, start_deg=0.0):
+    """A phase in radians that goes round `cycles` whole times in one loop."""
+    return 2 * np.pi * cycles * np.arange(n) / n + np.radians(start_deg)
+
+
+def level2(x):
+    """Everything is off, and nothing moves."""
+    x = delayed(x, 0.37 * SPS)                     # symbols no longer sit on samples
+    return x * np.exp(1j * turns(len(x), 203, 213))   # +37.13 Hz, started at 213 degrees
+
+
+def level3(x, symbol_power):
+    """What a real link does to it, kept small enough to be undone."""
+    rng = np.random.default_rng(3)
+    # A second path, 56 dB down and 1.6 symbols late.
+    x = x + 0.0015 * np.exp(1j * np.radians(70)) * delayed(x, 1.6 * SPS)
+    x = delayed(x, 0.61 * SPS)                     # a different timing offset
+    n = len(x)
+    # Carrier 58.17 Hz low, with slow phase wander on top (about half a degree rms).
+    phase = turns(n, -318, 131)
+    for cycles, degrees in ((3, 0.6), (7, 0.4), (16, 0.25), (29, 0.15)):
+        phase += np.radians(degrees) * np.sin(turns(n, cycles, rng.uniform(0, 360)))
+    # The level drifts by a tenth of a dB either way, once per loop.
+    gain = 10 ** (0.1 * np.sin(turns(n, 1, 45)) / 20)
+    x = x * gain * np.exp(1j * phase)
+    # Noise for 60 dB MER after a matched filter.
+    sigma = np.sqrt(symbol_power / SPS / 10 ** (60 / 10) / 2)
+    return x + sigma * (rng.standard_normal(n) + 1j * rng.standard_normal(n))
+
+
+def write_wav(path, x):
+    """16-bit stereo WAV, I on the left and Q on the right, with the "auxi"
+    chunk that SpectraFlux, SpectraVue, CuteSDR and others read for the
+    centre frequency."""
+    top = max(np.abs(x.real).max(), np.abs(x.imag).max())
+    iq = np.empty(2 * len(x), "<i2")
+    iq[0::2] = np.rint(x.real / top * PEAK * 32767)
+    iq[1::2] = np.rint(x.imag / top * PEAK * 32767)
+    data = iq.tobytes()
+    ms = round(1000 * len(x) / FS)
+    start = struct.pack("<8H", 2026, 11, 1, 23, 0, 0, 0, 0)
+    stop = struct.pack("<8H", 2026, 11, 1, 23, 0, 0, ms // 1000, ms % 1000)
+    auxi = start + stop + struct.pack("<4I", CENTRE_HZ, CENTRE_HZ, 0, FS) + bytes(24)
+    fmt = struct.pack("<HHIIHH", 1, 2, FS, FS * 4, 4, 16)
+    body = (b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+            + b"auxi" + struct.pack("<I", len(auxi)) + auxi
+            + b"data" + struct.pack("<I", len(data)) + data)
+    with open(path, "wb") as f:
+        f.write(b"RIFF" + struct.pack("<I", len(body)) + body)
+    rms = np.sqrt(np.mean(np.abs(x) ** 2))
+    print("%s: %d samples, %.3f s, %.2f MB, peak to average %.2f dB" % (
+        path, len(x), len(x) / FS, (len(body) + 8) / 1e6, 20 * np.log10(np.abs(x).max() / rms)))
+
+
 def main():
     bits = preamble_bits(2 * N_PREAMBLE)
     pre = [(PREAMBLE_LEVEL * (1 - 2 * bits[2 * k]), PREAMBLE_LEVEL * (1 - 2 * bits[2 * k + 1]))
@@ -84,6 +148,7 @@ def main():
             f.write("%d,%d,%d,\n" % (n, i, q))
         for n, ((i, q), w) in enumerate(zip(pay, words)):
             f.write("%d,%d,%d,%04X\n" % (N_PREAMBLE + n, i, q, w))
+    print("%s: %d symbols" % (KEY, len(pre) + len(pay)))
 
     sym = np.array([complex(i, q) for i, q in pre + pay])
     # Shaped over the whole loop at once: the tails of the last symbols wrap
@@ -91,32 +156,10 @@ def main():
     x = np.zeros(len(sym) * SPS, complex)
     x[::SPS] = sym
     x = np.fft.ifft(np.fft.fft(x) * rrc(len(x), SPS, ALPHA))
-    top = max(np.abs(x.real).max(), np.abs(x.imag).max())
-    iq = np.empty(2 * len(x), "<i2")
-    iq[0::2] = np.rint(x.real / top * PEAK * 32767)
-    iq[1::2] = np.rint(x.imag / top * PEAK * 32767)
-    data = iq.tobytes()
 
-    # 16-bit stereo WAV, I on the left and Q on the right, with the "auxi"
-    # chunk that SpectraFlux, SpectraVue, CuteSDR and others read for the
-    # centre frequency.
-    start = struct.pack("<8H", 2026, 11, 1, 23, 0, 0, 0, 0)
-    ms = round(1000 * len(x) / FS)
-    stop = struct.pack("<8H", 2026, 11, 1, 23, 0, 0, ms // 1000, ms % 1000)
-    auxi = start + stop + struct.pack("<4I", CENTRE_HZ, CENTRE_HZ, 0, FS) + bytes(24)
-    fmt = struct.pack("<HHIIHH", 1, 2, FS, FS * 4, 4, 16)
-    body = (b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
-            + b"auxi" + struct.pack("<I", len(auxi)) + auxi
-            + b"data" + struct.pack("<I", len(data)) + data)
-    with open(WAV, "wb") as f:
-        f.write(b"RIFF" + struct.pack("<I", len(body)) + body)
-
-    rms = np.sqrt(np.mean(np.abs(x) ** 2))
-    print("%s: %d symbols, %d samples, %.3f s, %.2f MB" % (
-        WAV, len(sym), len(x), len(x) / FS, (len(body) + 8) / 1e6))
-    print("peak to average %.2f dB, rms %.1f dB under full scale" % (
-        20 * np.log10(np.abs(x).max() / rms), -20 * np.log10(rms / top * PEAK / np.sqrt(2))))
-    print("%s: %d rows" % (KEY, len(sym)))
+    write_wav("65536qam_12k_192k.wav", x)
+    write_wav("65536qam_level2.wav", level2(x))
+    write_wav("65536qam_level3.wav", level3(x, np.mean(np.abs(sym) ** 2)))
 
 
 if __name__ == "__main__":

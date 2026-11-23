@@ -2,7 +2,7 @@
 
 A 65536-QAM signal in a 4 MB file, with the answer key, for anyone who wants to try demodulating it.
 
-I posted a 65536-QAM constellation received on a stock Icom IC-R8600, and a lot of people asked for a signal to try. This is one. It is computer-generated and has never been through a radio, so it is as clean as 16 bits allow. Getting it through real hardware is the hard part, and that part is yours.
+I posted a 65536-QAM constellation received on a stock Icom IC-R8600, and a lot of people asked for a signal to try. Here are three, from easy to hard. They are computer-generated and have never been through a radio. Getting one through real hardware is the hard part, and that part is yours.
 
 ## The signal
 
@@ -26,10 +26,12 @@ The file is one seamless loop. The pulse shaping was done around the whole thing
 
 | | |
 |---|---|
-| `65536qam_12k_192k.wav` | the signal |
+| `65536qam_12k_192k.wav` | level 1: the clean signal |
+| `65536qam_level2.wav` | level 2: carrier, timing and phase are off, but fixed |
+| `65536qam_level3.wav` | level 3: they move, and there is an echo and noise |
 | `symbols.csv` | the answer key: every symbol that was sent, in order |
-| `demod.py` | a short demodulator that counts the errors |
-| `generate.py` | the script that made the file |
+| `demod.py` | a short demodulator for level 1 that counts the errors |
+| `generate.py` | the script that made the files |
 
 Both scripts need Python 3 and numpy.
 
@@ -48,6 +50,20 @@ MER: 104.1 dB
 ```
 
 `demod.py` takes the easy way. It knows there is no carrier offset and that a symbol sits on every 16th sample starting with the first, so all it does is filter, pick samples, scale and decide. That is a few dozen lines. A real receiver has to find the timing, the carrier, the gain and which way up the constellation is, all by itself. That is the exercise.
+
+## Three levels
+
+All three files carry the same symbols, so `symbols.csv` is the answer key for each of them.
+
+| File | What is wrong with it |
+|---|---|
+| `65536qam_12k_192k.wav` | Nothing. No carrier offset, and a symbol on every 16th sample. |
+| `65536qam_level2.wav` | The carrier is off by some tens of hertz, the symbols fall between the samples, and the phase starts at an arbitrary angle. Nothing moves. |
+| `65536qam_level3.wav` | The same kind of offsets, plus things that move: slow phase wander of about half a degree rms, the level drifting 0.1 dB either way, a weak echo 56 dB down, and noise for 60 dB MER. |
+
+Those sound small. At this density they are not: half a degree is three times what a corner point tolerates, and 0.1 dB is four times.
+
+`demod.py` gets nearly every symbol wrong on levels 2 and 3, which is the point. Both have been demodulated blind with every symbol right (level 3: 688,848 symbols over six passes of the file), so it can be done. The exact numbers are in `generate.py` if you want to cheat.
 
 ## Why it is hard
 
@@ -118,9 +134,9 @@ The preamble gives a receiver the start of the frame, the gain and the phase, an
 
 ## Things to try
 
-- Demodulate it without using the fact that a symbol sits on sample 0.
+- Demodulate level 1 without using the fact that a symbol sits on sample 0.
 - Add noise until it breaks, and see how close you get to the table above.
-- Add a few hertz of carrier offset, or resample it by a few parts per million, and lock to it blind.
+- Resample it by a few parts per million, the way a receiver with its own clock would see it, and lock to that.
 - Play it out of a DAC or a signal generator, receive it with a radio, and see what comes back.
 
 ## Where this came from
