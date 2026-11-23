@@ -2,6 +2,13 @@
 
 A 65536-QAM signal in a 4 MB file, with the answer key, for anyone who wants to try demodulating it.
 
+<p align="center">
+  <img src="images/constellation.png" width="49%" alt="The full 65536-QAM constellation, 256 by 256 points">
+  <img src="images/zoom.png" width="47.5%" alt="The top-right corner of the constellation, 16 by 16 points">
+</p>
+
+*The level 1 signal from this repo, sent over coax into an RFSPACE NetSDR and demodulated in SpectraFlux. Left: all 65,536 points. Right: the top-right corner, 16 × 16 points, which is a complete 256-QAM constellation by itself.*
+
 I posted a 65536-QAM constellation received on a stock Icom IC-R8600, and a lot of people asked for a signal to try. Here are three, from easy to hard. They are computer-generated and have never been through a radio. Getting one through real hardware is the hard part, and that part is yours.
 
 ## The signal
