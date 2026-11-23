@@ -4,10 +4,12 @@
     65536qam_12k_192k.wav   level 1: clean
     65536qam_level2.wav     level 2: carrier, timing and phase are off, but fixed
     65536qam_level3.wav     level 3: they move, and there is an echo and noise
+    65536qam_level4.wav     level 4: level 3 as a capture: cut from a longer
+                            stream, at 250 kS/s
 
-All three carry the same symbols: a 64-symbol QPSK preamble, then every one
-of the 65536 constellation points exactly once. Each file is one seamless
-loop. README.md describes the format.
+All four carry the same symbols: a 64-symbol QPSK preamble, then every one
+of the 65536 constellation points exactly once. The first three are each one
+seamless loop. README.md describes the format.
 
     python3 generate.py
 
@@ -111,7 +113,37 @@ def level3(x, symbol_power):
     return x + sigma * (rng.standard_normal(n) + 1j * rng.standard_normal(n))
 
 
-def write_wav(path, x):
+FS4 = 250_000             # level 4's sample rate: 20.8333 samples per symbol
+
+
+def level4(x, symbol_power):
+    """Level 3's troubles in a capture: a piece cut out of a longer stream, at
+    a sample rate where symbols do not fall on samples, with a carrier that
+    is not a whole number of turns in the file."""
+    rng = np.random.default_rng(4)
+    x = x + 0.0015 * np.exp(1j * np.radians(250)) * delayed(x, 2.3 * SPS)   # echo, 56 dB down
+    # Three loops end to end, resampled from 192 to 250 kS/s.
+    n = 3 * len(x)
+    m = n * FS4 // FS
+    assert m * FS == n * FS4
+    spec = np.fft.fft(np.tile(x, 3))
+    wide = np.zeros(m, complex)
+    wide[:n // 2] = spec[:n // 2]
+    wide[-(n // 2):] = spec[-(n // 2):]
+    y = np.fft.ifft(wide) * m / n
+    t = np.arange(m) / FS4
+    phase = 2 * np.pi * 41.7 * t + np.radians(77)                 # carrier 41.7 Hz high
+    for hz, degrees in ((0.47, 0.6), (1.13, 0.4), (2.9, 0.25), (5.3, 0.15)):
+        phase += np.radians(degrees) * np.sin(2 * np.pi * hz * t + rng.uniform(0, 2 * np.pi))
+    gain = 10 ** (0.1 * np.sin(2 * np.pi * 0.21 * t + 1.0) / 20)   # a tenth of a dB either way
+    y = y * gain * np.exp(1j * phase)
+    sigma = np.sqrt(symbol_power / SPS ** 2 * (FS4 / FS * SPS) / 10 ** (60 / 10) / 2)
+    y = y + sigma * (rng.standard_normal(m) + 1j * rng.standard_normal(m))
+    # One and a half loops, starting in the middle of a frame and of a symbol.
+    return y[387_010:387_010 + 2_050_000]
+
+
+def write_wav(path, x, rate=FS):
     """16-bit stereo WAV, I on the left and Q on the right, with the "auxi"
     chunk that SpectraFlux, SpectraVue, CuteSDR and others read for the
     centre frequency."""
@@ -120,11 +152,11 @@ def write_wav(path, x):
     iq[0::2] = np.rint(x.real / top * PEAK * 32767)
     iq[1::2] = np.rint(x.imag / top * PEAK * 32767)
     data = iq.tobytes()
-    ms = round(1000 * len(x) / FS)
+    ms = round(1000 * len(x) / rate)
     start = struct.pack("<8H", 2026, 11, 1, 23, 0, 0, 0, 0)
     stop = struct.pack("<8H", 2026, 11, 1, 23, 0, 0, ms // 1000, ms % 1000)
-    auxi = start + stop + struct.pack("<4I", CENTRE_HZ, CENTRE_HZ, 0, FS) + bytes(24)
-    fmt = struct.pack("<HHIIHH", 1, 2, FS, FS * 4, 4, 16)
+    auxi = start + stop + struct.pack("<4I", CENTRE_HZ, CENTRE_HZ, 0, rate) + bytes(24)
+    fmt = struct.pack("<HHIIHH", 1, 2, rate, rate * 4, 4, 16)
     body = (b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
             + b"auxi" + struct.pack("<I", len(auxi)) + auxi
             + b"data" + struct.pack("<I", len(data)) + data)
@@ -132,7 +164,7 @@ def write_wav(path, x):
         f.write(b"RIFF" + struct.pack("<I", len(body)) + body)
     rms = np.sqrt(np.mean(np.abs(x) ** 2))
     print("%s: %d samples, %.3f s, %.2f MB, peak to average %.2f dB" % (
-        path, len(x), len(x) / FS, (len(body) + 8) / 1e6, 20 * np.log10(np.abs(x).max() / rms)))
+        path, len(x), len(x) / rate, (len(body) + 8) / 1e6, 20 * np.log10(np.abs(x).max() / rms)))
 
 
 def main():
@@ -160,6 +192,7 @@ def main():
     write_wav("65536qam_12k_192k.wav", x)
     write_wav("65536qam_level2.wav", level2(x))
     write_wav("65536qam_level3.wav", level3(x, np.mean(np.abs(sym) ** 2)))
+    write_wav("65536qam_level4.wav", level4(x, np.mean(np.abs(sym) ** 2)), FS4)
 
 
 if __name__ == "__main__":

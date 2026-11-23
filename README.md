@@ -9,7 +9,7 @@ A 65536-QAM signal in a 4 MB file, with the answer key, for anyone who wants to 
 
 *The level 1 signal from this repo, sent over coax into an RFSPACE NetSDR and demodulated in SpectraFlux. Left: all 65,536 points. Right: the top-right corner, 16 × 16 points, which is a complete 256-QAM constellation by itself.*
 
-I posted a 65536-QAM constellation received on a stock Icom IC-R8600. Here's a signal to try, in three versions from easy to hard. They are computer-generated and have never been through a radio. Getting one through real hardware is the hard part, and that part is yours.
+I posted a 65536-QAM constellation received on a stock Icom IC-R8600. Here's a signal to try, in four versions from easy to hard. They are computer-generated and have never been through a radio. Getting one through real hardware is the hard part, and that part is yours.
 
 ## The signal
 
@@ -20,14 +20,14 @@ I posted a 65536-QAM constellation received on a stock Icom IC-R8600. Here's a s
 | Bit rate | 192 kbit/s |
 | Pulse shape | root raised cosine, roll-off 0.35 |
 | Bandwidth | 16.2 kHz |
-| Sample rate | 192 kS/s, 16 samples per symbol |
+| Sample rate | 192 kS/s, 16 samples per symbol (level 4: 250 kS/s) |
 | Peak to average | 6.9 dB |
-| Length | 65,600 symbols, 5.47 s |
-| File | 16-bit WAV, I on the left channel, Q on the right, 4.2 MB |
+| Length | 65,600 symbols, 5.47 s (level 4: 8.2 s) |
+| File | 16-bit WAV, I on the left channel, Q on the right, 4.2 MB (level 4: 8.2 MB) |
 
 It holds a 64-symbol QPSK preamble and then every one of the 65,536 points exactly once, in scrambled order.
 
-The file is one seamless loop. The pulse shaping was done around the whole thing at once, so the end runs straight into the start. Play it on repeat and there is no glitch at the join.
+Levels 1 to 3 are each one seamless loop. The pulse shaping was done around the whole thing at once, so the end runs straight into the start. Play one on repeat and there is no glitch at the join. That also makes them easier than a real capture: a filter can wrap around the ends, and one FFT over the whole file finds the carrier exactly. Level 4 takes those shortcuts away.
 
 ## Files
 
@@ -36,6 +36,7 @@ The file is one seamless loop. The pulse shaping was done around the whole thing
 | `65536qam_12k_192k.wav` | level 1: the clean signal |
 | `65536qam_level2.wav` | level 2: carrier, timing and phase are off, but fixed |
 | `65536qam_level3.wav` | level 3: they move, and there is an echo and noise |
+| `65536qam_level4.wav` | level 4: level 3 as a capture, cut from a longer stream, at 250 kS/s |
 | `symbols.csv` | the answer key: every symbol that was sent, in order |
 | `demod.py` | a short demodulator for level 1 that counts the errors |
 | `generate.py` | the script that made the files |
@@ -58,19 +59,20 @@ MER: 104.1 dB
 
 `demod.py` takes the easy way. It knows there is no carrier offset and that a symbol sits on every 16th sample starting with the first, so all it does is filter, pick samples, scale and decide. That is a few dozen lines. A real receiver has to find the timing, the carrier, the gain and which way up the constellation is, all by itself. That is the exercise.
 
-## Three levels
+## Four levels
 
-All three files carry the same symbols, so `symbols.csv` is the answer key for each of them.
+All four files carry the same symbols, so `symbols.csv` is the answer key for each of them.
 
 | File | What is wrong with it |
 |---|---|
 | `65536qam_12k_192k.wav` | Nothing. No carrier offset, and a symbol on every 16th sample. |
 | `65536qam_level2.wav` | The carrier is off by some tens of hertz, the symbols fall between the samples, and the phase starts at an arbitrary angle. Nothing moves. |
 | `65536qam_level3.wav` | The same kind of offsets, plus things that move: slow phase wander of about half a degree rms, the level drifting 0.1 dB either way, a weak echo 56 dB down, and noise for 60 dB MER. |
+| `65536qam_level4.wav` | Level 3's troubles, in a capture. It is 8.2 s cut out of a longer stream, so it starts in the middle of a frame and of a symbol and it does not loop. The sample rate is 250 kS/s, which is 20.8333 samples per symbol, so symbols do not fall on samples. The carrier offset is not a whole number of turns in the file, so it does not land on an FFT bin. |
 
 Those sound small. At this density they are not: half a degree is three times what a corner point tolerates, and 0.1 dB is four times.
 
-`demod.py` gets nearly every symbol wrong on levels 2 and 3, which is the point. Both have been demodulated blind with every symbol right (level 3: 688,848 symbols over six passes of the file), so it can be done. The exact numbers are in `generate.py` if you want to cheat.
+`demod.py` gets nearly every symbol wrong on levels 2 and 3, which is the point, and it cannot read level 4 at all. All of them have been demodulated blind with every symbol right (level 3: 688,848 symbols over six passes of the file; level 4: all 162,539 symbols a block-by-block analyzer saw), so it can be done. The exact numbers are in `generate.py` if you want to cheat.
 
 ## Why it is hard
 
